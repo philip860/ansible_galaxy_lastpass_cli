@@ -1,0 +1,10 @@
+- name: Retrieve LastPass Credentials
+  hosts: localhost
+  gather_facts: no
+  roles:
+    - lastpass
+  vars:
+    lastpass_username_var: "{{ vault_lastpass_username }}"
+    lastpass_password_var: "{{ vault_lastpass_password }}"
+    lastpass_entry: "Passwords/Shared-ITS - IAM/Service-Accounts/demo-netid-automation"
+    lastpass_action: "get"
