@@ -116,12 +116,19 @@ def run_module():
         session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
 
         if "Not logged in" in session_status.stdout:
-            # Log in using piped password
-            login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
-            login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
+            try:
+                # Log in using piped password
+                login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
+                login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
-            if login_result.returncode != 0:
-                raise Exception(f"Failed to log in to LastPass: {login_result.stderr.strip()}")
+                if login_result.returncode != 0:
+                    raise Exception(f"Failed to log in to LastPass: {login_result.stderr.strip()}")
+            except Exception as e:
+                error_msg = str(e)
+                if "No such file or directory" in error_msg and ("/root/.local/share/lpass" in error_msg or "~/.local/share/lpass" in error_msg):
+                    module.fail_json(msg="Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/lpass' or 'mkdir -p /root/.local/share/lpass' and re-run the playbook.", **result)
+                else:
+                    module.fail_json(msg=error_msg, **result)
 
         # Perform requested action
         if action == 'get':
@@ -155,12 +162,7 @@ def run_module():
         module.exit_json(**result)
 
     except Exception as e:
-        error_msg = str(e)
-
-        if "No such file or directory" in error_msg and ("/root/.local/share/" in error_msg or "~/.local/share/" in error_msg):
-            module.fail_json(msg="Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/' or 'mkdir -p /root/.local/share/' and re-run the playbook.", **result)
-        else:
-            module.fail_json(msg=error_msg, **result)
+        module.fail_json(msg=str(e), **result)
 
 def main():
     run_module()
