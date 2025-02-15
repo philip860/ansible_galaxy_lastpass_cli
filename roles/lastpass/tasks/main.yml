@@ -1,0 +1,20 @@
+
+
+
+- name: Get stored password
+  lastpass_cli:
+    username: "{{ lastpass_username_var }}"
+    password: "{{ lastpass_password_var }}"
+    entry: '{{ lastpass_entry }}'
+    action: "{{ lastpass_action }}"
+    # new_password: "{{ lastpass_password }}"
+  register: lastpass_getpass_output
+
+
+
+- name: Print lastpass_getpass_output
+  ansible.builtin.debug:
+    msg: "{{ lastpass_getpass_output }}"
+
+
+
