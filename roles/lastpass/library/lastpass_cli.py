@@ -5,6 +5,7 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
+import os
 import subprocess
 from ansible.module_utils.basic import AnsibleModule
 
@@ -109,14 +110,29 @@ def run_module():
     action = module.params['action']
     new_password = module.params.get('new_password', None)
 
+    # Detect if running as root and set LastPass home directory
+    if os.geteuid() == 0:
+        regular_user = os.getenv("SUDO_USER") or os.getenv("USER")
+        if regular_user and regular_user != "root":
+            user_home = f"/home/{regular_user}/.local/share/"
+        else:
+            user_home = "/root/.local/share/"
+            # ✅ Ensure the directory exists
+            os.makedirs(user_home, exist_ok=True)
+            os.chmod(user_home, 0o700)  # Secure permissions
+    else:
+        user_home = os.path.expanduser("~/.local/share/")
+
+    os.environ["LPASS_HOME"] = user_home
+
     # Ensure LastPass session exists
     session_status_cmd = "lpass status"
-    session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
+    session_status = subprocess.run(session_status_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
     if "Not logged in" in session_status.stdout:
         # Log in using piped password
         login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
-        login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
+        login_result = subprocess.run(login_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         if login_result.returncode != 0:
             module.fail_json(msg=f"Failed to log in to LastPass: {login_result.stderr.strip()}", **result)
@@ -125,7 +141,7 @@ def run_module():
     if action == 'get':
         # Retrieve password from LastPass
         get_cmd = f"lpass show --password '{entry}'"
-        get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
+        get_result = subprocess.run(get_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         if get_result.returncode != 0:
             module.fail_json(msg=f"Failed to retrieve password: {get_result.stderr.strip()}", **result)
@@ -140,7 +156,7 @@ def run_module():
 
         # Update password securely
         update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
-        update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
+        update_result = subprocess.run(update_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
         if update_result.returncode != 0:
             module.fail_json(msg=f"Failed to update password: {update_result.stderr.strip()}", **result)
@@ -150,7 +166,7 @@ def run_module():
 
     # Logout from LastPass to clean up session
     logout_cmd = "lpass logout --force"
-    subprocess.run(logout_cmd, shell=True, capture_output=True, text=True)
+    subprocess.run(logout_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
 
     module.exit_json(**result)
 
