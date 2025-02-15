@@ -154,7 +154,7 @@ def run_module():
                 result['message'] = "New password must be provided for update action."
                 module.exit_json(**result)
 
-            update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
+            update_cmd = f"echo '{new_password}' | LPASS_DISABLE_PINENTRY=1 lpass edit '{entry}' --password --non-interactive"
             update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
 
             if update_result.returncode != 0:
