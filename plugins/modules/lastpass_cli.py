@@ -6,6 +6,7 @@ from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
 import subprocess
+import os
 from ansible.module_utils.basic import AnsibleModule
 
 DOCUMENTATION = r'''
@@ -91,7 +92,7 @@ def run_module():
 
     result = dict(
         changed=False,
-        original_message='',
+        original_message='Input parameters received',
         message=''
     )
 
@@ -109,50 +110,69 @@ def run_module():
     action = module.params['action']
     new_password = module.params.get('new_password', None)
 
-    # Ensure LastPass session exists
-    session_status_cmd = "lpass status"
-    session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
+    try:
+        # Ensure required directories exist
+        lpass_dir = os.path.expanduser("~/.local/share/lpass")
+        root_lpass_dir = "/root/.local/share/lpass"
+        if not os.path.exists(lpass_dir):
+            os.makedirs(lpass_dir, exist_ok=True)
+        if os.geteuid() == 0 and not os.path.exists(root_lpass_dir):
+            os.makedirs(root_lpass_dir, exist_ok=True)
 
-    if "Not logged in" in session_status.stdout:
-        # Log in using piped password
-        login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
-        login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
+        # Ensure LastPass session exists
+        session_status_cmd = "lpass status"
+        session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
 
-        if login_result.returncode != 0:
-            module.fail_json(msg=f"Failed to log in to LastPass: {login_result.stderr.strip()}", **result)
+        if "Not logged in" in session_status.stdout:
+            try:
+                # Log in using piped password
+                login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
+                login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
-    # Perform requested action
-    if action == 'get':
-        # Retrieve password from LastPass
-        get_cmd = f"lpass show --password '{entry}'"
-        get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
+                if login_result.returncode != 0:
+                    result['message'] = f"Login failed. Ensure '/root/.local/share/lpass' exists. Run: mkdir -p /root/.local/share/lpass"
+                    module.exit_json(**result)
+            except Exception as e:
+                result['message'] = str(e)
+                module.exit_json(**result)
 
-        if get_result.returncode != 0:
-            module.fail_json(msg=f"Failed to retrieve password: {get_result.stderr.strip()}", **result)
+        # Perform requested action
+        if action == 'get':
+            get_cmd = f"lpass show --password '{entry}'"
+            get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
 
-        retrieved_password = get_result.stdout.strip()
-        result['password'] = retrieved_password
-        result['message'] = "Password retrieved successfully."
+            if get_result.returncode != 0:
+                result['message'] = f"Failed to retrieve password: {get_result.stderr.strip()}"
+                module.exit_json(**result)
 
-    elif action == 'update':
-        if not new_password:
-            module.fail_json(msg="New password must be provided for update action.", **result)
+            retrieved_password = get_result.stdout.strip()
+            result['password'] = retrieved_password
+            result['message'] = "Password retrieved successfully."
 
-        # Update password securely
-        update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
-        update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
+        elif action == 'update':
+            if not new_password:
+                result['message'] = "New password must be provided for update action."
+                module.exit_json(**result)
 
-        if update_result.returncode != 0:
-            module.fail_json(msg=f"Failed to update password: {update_result.stderr.strip()}", **result)
+            update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
+            update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
 
-        result['changed'] = True
-        result['message'] = "Password updated successfully."
+            if update_result.returncode != 0:
+                result['message'] = f"Failed to update password: {update_result.stderr.strip()}"
+                module.exit_json(**result)
 
-    # Logout from LastPass to clean up session
-    logout_cmd = "lpass logout --force"
-    subprocess.run(logout_cmd, shell=True, capture_output=True, text=True)
+            result['changed'] = True
+            result['message'] = "Password updated successfully."
 
-    module.exit_json(**result)
+        # Logout from LastPass to clean up session
+        logout_cmd = "lpass logout --force"
+        subprocess.run(logout_cmd, shell=True, capture_output=True, text=True)
+
+        module.exit_json(**result)
+
+    except Exception as e:
+        result['message'] = str(e)
+        module.exit_json(**result)
 
 def main():
     run_module()
