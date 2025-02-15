@@ -81,6 +81,16 @@ password:
     returned: when action is 'get'
 '''
 
+def ensure_directory(directory):
+    """Ensures the directory exists, is writable, and has correct permissions."""
+    if not os.path.exists(directory):
+        try:
+            subprocess.run(["mkdir", "-p", directory], check=True)
+            subprocess.run(["chmod", "700", directory], check=True)
+        except subprocess.CalledProcessError as e:
+            return f"Failed to create directory {directory}: {str(e)}"
+    return None
+
 def run_module():
     module_args = dict(
         username=dict(type='str', required=True, no_log=True),
@@ -110,20 +120,19 @@ def run_module():
     action = module.params['action']
     new_password = module.params.get('new_password', None)
 
-    # Detect if running as root and set LastPass home directory
-    if os.geteuid() == 0:
-        regular_user = os.getenv("SUDO_USER") or os.getenv("USER")
-        if regular_user and regular_user != "root":
-            user_home = f"/home/{regular_user}/.local/share/"
-        else:
-            user_home = "/root/.local/share/"
-            # ✅ Ensure the directory exists
-            os.makedirs(user_home, exist_ok=True)
-            os.chmod(user_home, 0o700)  # Secure permissions
+    # Detect if running as root or inside /root directory
+    if os.geteuid() == 0 or os.getcwd().startswith("/root"):
+        home_directory = "/root/.local/share"
     else:
-        user_home = os.path.expanduser("~/.local/share/")
+        home_directory = os.path.expanduser("~/.local/share")
 
-    os.environ["LPASS_HOME"] = user_home
+    # Ensure directory exists
+    error = ensure_directory(home_directory)
+    if error:
+        module.fail_json(msg=error, **result)
+
+    # Set LastPass home environment variable
+    os.environ["LPASS_HOME"] = home_directory
 
     # Ensure LastPass session exists
     session_status_cmd = "lpass status"
