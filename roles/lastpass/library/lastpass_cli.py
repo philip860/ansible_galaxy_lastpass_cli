@@ -92,7 +92,7 @@ def run_module():
 
     result = dict(
         changed=False,
-        original_message='',
+        original_message='Input parameters received',
         message=''
     )
 
@@ -126,9 +126,11 @@ def run_module():
             except Exception as e:
                 error_msg = str(e)
                 if "No such file or directory" in error_msg and ("/root/.local/share/lpass" in error_msg or "~/.local/share/lpass" in error_msg):
-                    module.fail_json(msg="Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/lpass' or 'mkdir -p /root/.local/share/lpass' and re-run the playbook.", **result)
+                    result['message'] = "Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/lpass' or 'mkdir -p /root/.local/share/lpass' and re-run the playbook."
+                    module.exit_json(**result)
                 else:
-                    module.fail_json(msg=error_msg, **result)
+                    result['message'] = error_msg
+                    module.exit_json(**result)
 
         # Perform requested action
         if action == 'get':
@@ -136,7 +138,8 @@ def run_module():
             get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
 
             if get_result.returncode != 0:
-                raise Exception(f"Failed to retrieve password: {get_result.stderr.strip()}")
+                result['message'] = f"Failed to retrieve password: {get_result.stderr.strip()}"
+                module.exit_json(**result)
 
             retrieved_password = get_result.stdout.strip()
             result['password'] = retrieved_password
@@ -144,13 +147,15 @@ def run_module():
 
         elif action == 'update':
             if not new_password:
-                raise ValueError("New password must be provided for update action.")
+                result['message'] = "New password must be provided for update action."
+                module.exit_json(**result)
 
             update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
             update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
 
             if update_result.returncode != 0:
-                raise Exception(f"Failed to update password: {update_result.stderr.strip()}")
+                result['message'] = f"Failed to update password: {update_result.stderr.strip()}"
+                module.exit_json(**result)
 
             result['changed'] = True
             result['message'] = "Password updated successfully."
@@ -162,7 +167,8 @@ def run_module():
         module.exit_json(**result)
 
     except Exception as e:
-        module.fail_json(msg=str(e), **result)
+        result['message'] = str(e)
+        module.exit_json(**result)
 
 def main():
     run_module()
