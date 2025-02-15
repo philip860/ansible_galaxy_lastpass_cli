@@ -5,8 +5,8 @@
 from __future__ import (absolute_import, division, print_function)
 __metaclass__ = type
 
-import os
 import subprocess
+import os
 from ansible.module_utils.basic import AnsibleModule
 
 DOCUMENTATION = r'''
@@ -81,16 +81,6 @@ password:
     returned: when action is 'get'
 '''
 
-def ensure_directory(directory):
-    """Ensures the directory exists, is writable, and has correct permissions."""
-    if not os.path.exists(directory):
-        try:
-            subprocess.run(["mkdir", "-p", directory], check=True)
-            subprocess.run(["chmod", "700", directory], check=True)
-        except subprocess.CalledProcessError as e:
-            return f"Failed to create directory {directory}: {str(e)}"
-    return None
-
 def run_module():
     module_args = dict(
         username=dict(type='str', required=True, no_log=True),
@@ -120,64 +110,57 @@ def run_module():
     action = module.params['action']
     new_password = module.params.get('new_password', None)
 
-    # Detect if running as root or inside /root directory
-    if os.geteuid() == 0 or os.getcwd().startswith("/root"):
-        home_directory = "/root/.local/share"
-    else:
-        home_directory = os.path.expanduser("~/.local/share")
+    try:
+        # Ensure LastPass session exists
+        session_status_cmd = "lpass status"
+        session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
 
-    # Ensure directory exists
-    error = ensure_directory(home_directory)
-    if error:
-        module.fail_json(msg=error, **result)
+        if "Not logged in" in session_status.stdout:
+            # Log in using piped password
+            login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
+            login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
-    # Set LastPass home environment variable
-    os.environ["LPASS_HOME"] = home_directory
+            if login_result.returncode != 0:
+                raise Exception(f"Failed to log in to LastPass: {login_result.stderr.strip()}")
 
-    # Ensure LastPass session exists
-    session_status_cmd = "lpass status"
-    session_status = subprocess.run(session_status_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        # Perform requested action
+        if action == 'get':
+            get_cmd = f"lpass show --password '{entry}'"
+            get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
 
-    if "Not logged in" in session_status.stdout:
-        # Log in using piped password
-        login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
-        login_result = subprocess.run(login_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+            if get_result.returncode != 0:
+                raise Exception(f"Failed to retrieve password: {get_result.stderr.strip()}")
 
-        if login_result.returncode != 0:
-            module.fail_json(msg=f"Failed to log in to LastPass: {login_result.stderr.strip()}", **result)
+            retrieved_password = get_result.stdout.strip()
+            result['password'] = retrieved_password
+            result['message'] = "Password retrieved successfully."
 
-    # Perform requested action
-    if action == 'get':
-        # Retrieve password from LastPass
-        get_cmd = f"lpass show --password '{entry}'"
-        get_result = subprocess.run(get_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        elif action == 'update':
+            if not new_password:
+                raise ValueError("New password must be provided for update action.")
 
-        if get_result.returncode != 0:
-            module.fail_json(msg=f"Failed to retrieve password: {get_result.stderr.strip()}", **result)
+            update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
+            update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
 
-        retrieved_password = get_result.stdout.strip()
-        result['password'] = retrieved_password
-        result['message'] = "Password retrieved successfully."
+            if update_result.returncode != 0:
+                raise Exception(f"Failed to update password: {update_result.stderr.strip()}")
 
-    elif action == 'update':
-        if not new_password:
-            module.fail_json(msg="New password must be provided for update action.", **result)
+            result['changed'] = True
+            result['message'] = "Password updated successfully."
 
-        # Update password securely
-        update_cmd = f"echo '{new_password}' | lpass edit '{entry}' --password --non-interactive"
-        update_result = subprocess.run(update_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
+        # Logout from LastPass to clean up session
+        logout_cmd = "lpass logout --force"
+        subprocess.run(logout_cmd, shell=True, capture_output=True, text=True)
 
-        if update_result.returncode != 0:
-            module.fail_json(msg=f"Failed to update password: {update_result.stderr.strip()}", **result)
+        module.exit_json(**result)
 
-        result['changed'] = True
-        result['message'] = "Password updated successfully."
+    except Exception as e:
+        error_msg = str(e)
 
-    # Logout from LastPass to clean up session
-    logout_cmd = "lpass logout --force"
-    subprocess.run(logout_cmd, shell=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE, universal_newlines=True)
-
-    module.exit_json(**result)
+        if "No such file or directory" in error_msg and ("/root/.local/share/" in error_msg or "~/.local/share/" in error_msg):
+            module.fail_json(msg="Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/' or 'mkdir -p /root/.local/share/' and re-run the playbook.", **result)
+        else:
+            module.fail_json(msg=error_msg, **result)
 
 def main():
     run_module()
