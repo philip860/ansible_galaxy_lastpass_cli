@@ -111,6 +111,14 @@ def run_module():
     new_password = module.params.get('new_password', None)
 
     try:
+        # Ensure required directories exist
+        lpass_dir = os.path.expanduser("~/.local/share/lpass")
+        root_lpass_dir = "/root/.local/share/lpass"
+        if not os.path.exists(lpass_dir):
+            os.makedirs(lpass_dir, exist_ok=True)
+        if os.geteuid() == 0 and not os.path.exists(root_lpass_dir):
+            os.makedirs(root_lpass_dir, exist_ok=True)
+
         # Ensure LastPass session exists
         session_status_cmd = "lpass status"
         session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
@@ -122,15 +130,11 @@ def run_module():
                 login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
                 if login_result.returncode != 0:
-                    raise Exception(f"Failed to log in to LastPass: {login_result.stderr.strip()}")
+                    result['message'] = f"Login failed. Ensure '/root/.local/share/lpass' exists. Run: mkdir -p /root/.local/share/lpass"
+                    module.exit_json(**result)
             except Exception as e:
-                error_msg = str(e)
-                if "No such file or directory" in error_msg and ("/root/.local/share/lpass" in error_msg or "~/.local/share/lpass" in error_msg):
-                    result['message'] = "Error: Missing LastPass data directories. Please create them using 'mkdir -p ~/.local/share/lpass' or 'mkdir -p /root/.local/share/lpass' and re-run the playbook."
-                    module.exit_json(**result)
-                else:
-                    result['message'] = error_msg
-                    module.exit_json(**result)
+                result['message'] = str(e)
+                module.exit_json(**result)
 
         # Perform requested action
         if action == 'get':
