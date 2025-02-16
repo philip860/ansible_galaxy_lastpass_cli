@@ -130,7 +130,7 @@ def run_module():
                 login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
                 if login_result.returncode != 0:
-                    result['message'] = f"Login failed. Ensure '/root/.local/share/lpass' exists. Run: mkdir -p /root/.local/share/lpass"
+                    result['message'] = "Login failed. Ensure '/root/.local/share/lpass' exists. Run: mkdir -p /root/.local/share/lpass"
                     module.exit_json(**result)
             except Exception as e:
                 result['message'] = str(e)
@@ -155,15 +155,18 @@ def run_module():
                 module.exit_json(**result)
 
             update_cmd = f"echo '{new_password}' | LPASS_DISABLE_PINENTRY=1 lpass edit '{entry}' --password --non-interactive"
-
             update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
 
             if update_result.returncode != 0:
                 result['message'] = f"Failed to update password: {update_result.stderr.strip()}"
                 module.exit_json(**result)
 
+            # Sync LastPass to reflect updates
+            sync_cmd = "lpass sync now"
+            subprocess.run(sync_cmd, shell=True, capture_output=True, text=True)
+
             result['changed'] = True
-            result['message'] = "Password updated successfully."
+            result['message'] = "Password updated successfully and synced."
 
         # Logout from LastPass to clean up session
         logout_cmd = "lpass logout --force"
