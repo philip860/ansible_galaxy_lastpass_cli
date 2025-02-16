@@ -18,7 +18,7 @@ short_description: Ansible module for managing credentials with lastpass-cli
 version_added: "1.0.0"
 
 description:
-    - This module allows users to log into LastPass, retrieve stored credentials, and update passwords using the lastpass-cli tool.
+    - This module allows users to log into LastPass, retrieve stored credentials, update passwords, and create new entries using the lastpass-cli tool.
 
 options:
     username:
@@ -30,16 +30,24 @@ options:
         required: true
         type: str
     entry:
-        description: The LastPass entry name to retrieve or update.
+        description: The LastPass entry name to retrieve, update, or create.
         required: true
         type: str
     action:
-        description: The action to perform ("get" to retrieve, "update" to change password).
+        description: The action to perform ("get" to retrieve, "update" to change password, "create" to add a new entry).
         required: true
-        choices: ["get", "update"]
+        choices: ["get", "update", "create"]
         type: str
     new_password:
         description: The new password when updating an entry.
+        required: false
+        type: str
+    secret_password:
+        description: The password for a new entry when using the "create" action.
+        required: false
+        type: str
+    secret_user:
+        description: The username for a new entry when using the "create" action.
         required: false
         type: str
 
@@ -64,6 +72,16 @@ EXAMPLES = r'''
     entry: "Passwords/Shared-ITS - IAM/Service-Accounts/demo-netid-automation"
     action: "update"
     new_password: "newsecurepassword"
+
+# Create a new password entry in LastPass
+- name: Create a new entry
+  lastpass_cli:
+    username: "philipduncan860@gmail.com"
+    password: "mysecurepassword"
+    entry: "Passwords/Shared-ITS - IAM/Service-Accounts/new-entry"
+    action: "create"
+    secret_password: "newsecurepassword"
+    secret_user: "newuser@example.com"
 '''
 
 RETURN = r'''
@@ -86,8 +104,10 @@ def run_module():
         username=dict(type='str', required=True, no_log=True),
         password=dict(type='str', required=True, no_log=True),
         entry=dict(type='str', required=True),
-        action=dict(type='str', required=True, choices=['get', 'update']),
-        new_password=dict(type='str', required=False, no_log=True)
+        action=dict(type='str', required=True, choices=['get', 'update', 'create']),
+        new_password=dict(type='str', required=False, no_log=True),
+        secret_password=dict(type='str', required=False, no_log=True),
+        secret_user=dict(type='str', required=False)
     )
 
     result = dict(
@@ -109,68 +129,49 @@ def run_module():
     entry = module.params['entry']
     action = module.params['action']
     new_password = module.params.get('new_password', None)
+    secret_password = module.params.get('secret_password', None)
+    secret_user = module.params.get('secret_user', None)
 
     try:
-        # Ensure required directories exist
-        lpass_dir = os.path.expanduser("~/.local/share/lpass")
-        root_lpass_dir = "/root/.local/share/lpass"
-        if not os.path.exists(lpass_dir):
-            os.makedirs(lpass_dir, exist_ok=True)
-        if os.geteuid() == 0 and not os.path.exists(root_lpass_dir):
-            os.makedirs(root_lpass_dir, exist_ok=True)
-
-        # Ensure LastPass session exists
         session_status_cmd = "lpass status"
         session_status = subprocess.run(session_status_cmd, shell=True, capture_output=True, text=True)
 
         if "Not logged in" in session_status.stdout:
-            try:
-                # Log in using piped password
-                login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
-                login_result = subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
+            login_cmd = f"echo '{password}' | LPASS_DISABLE_PINENTRY=1 lpass login {username}"
+            subprocess.run(login_cmd, shell=True, capture_output=True, text=True)
 
-                if login_result.returncode != 0:
-                    result['message'] = "Login failed. Ensure '/root/.local/share/lpass' exists. Run: mkdir -p /root/.local/share/lpass"
-                    module.exit_json(**result)
-            except Exception as e:
-                result['message'] = str(e)
+        if action == 'update':
+            update_cmd = f"echo '{new_password}' | LPASS_DISABLE_PINENTRY=1 lpass edit '{entry}' --password --non-interactive"
+            update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
+            if update_result.returncode != 0:
+                result['message'] = f"Failed to update password: {update_result.stderr.strip()}"
                 module.exit_json(**result)
+            sync_cmd = "lpass sync now"
+            subprocess.run(sync_cmd, shell=True, capture_output=True, text=True)
+            result['changed'] = True
+            result['message'] = "Password updated successfully and synced."
 
-        # Perform requested action
-        if action == 'get':
+        elif action == 'create':
+            create_cmd = f"echo '{secret_password}' | LPASS_DISABLE_PINENTRY=1 lpass add '{entry}' --password --non-interactive"
+            create_result = subprocess.run(create_cmd, shell=True, capture_output=True, text=True)
+            if create_result.returncode != 0:
+                result['message'] = f"Failed to create entry: {create_result.stderr.strip()}"
+                module.exit_json(**result)
+            sync_cmd = "lpass sync now"
+            subprocess.run(sync_cmd, shell=True, capture_output=True, text=True)
+            result['changed'] = True
+            result['message'] = "Entry created successfully and synced."
+
+
+        elif action == 'get':
             get_cmd = f"lpass show --password '{entry}'"
             get_result = subprocess.run(get_cmd, shell=True, capture_output=True, text=True)
-
             if get_result.returncode != 0:
-                result['message'] = f"Failed to retrieve password: {get_result.stderr.strip()}"
-                module.exit_json(**result)
-
+                module.fail_json(msg=f"Failed to retrieve password: {get_result.stderr.strip()}", **result)
             retrieved_password = get_result.stdout.strip()
             result['password'] = retrieved_password
             result['message'] = "Password retrieved successfully."
 
-        elif action == 'update':
-            if not new_password:
-                result['message'] = "New password must be provided for update action."
-                module.exit_json(**result)
-
-            update_cmd = f"echo '{new_password}' | LPASS_DISABLE_PINENTRY=1 lpass edit '{entry}' --password --non-interactive"
-            update_result = subprocess.run(update_cmd, shell=True, capture_output=True, text=True)
-
-            if update_result.returncode != 0:
-                result['message'] = f"Failed to update password: {update_result.stderr.strip()}"
-                module.exit_json(**result)
-
-            # Sync LastPass to reflect updates
-            sync_cmd = "lpass sync now"
-            subprocess.run(sync_cmd, shell=True, capture_output=True, text=True)
-
-            result['changed'] = True
-            result['message'] = "Password updated successfully and synced."
-
-        # Logout from LastPass to clean up session
-        logout_cmd = "lpass logout --force"
-        subprocess.run(logout_cmd, shell=True, capture_output=True, text=True)
 
         module.exit_json(**result)
 
